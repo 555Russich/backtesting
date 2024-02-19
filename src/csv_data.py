@@ -1,4 +1,4 @@
-from my_tinkoff_investments.csv_candles import DELIMITER
+from my_tinkoff.csv_candles import DELIMITER
 
 import backtrader as bt
 

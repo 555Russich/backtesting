@@ -1,21 +1,22 @@
-import asyncio
 import logging
 from datetime import datetime, timedelta
 
 from tinkoff.invest import (
     TradeDirection,
     InstrumentIdType,
-    CandleInterval, Instrument,
+    CandleInterval,
+    Instrument,
 )
 import backtrader as bt
-from my_tinkoff_investments.date_utils import DateTimeFactory, dt_form_sys
-from my_tinkoff_investments.api_calls.instruments import get_instrument_by
-from my_tinkoff_investments.csv_candles import CSVCandles
-from my_tinkoff_investments.instruments.shares import Shares
+from my_tinkoff.date_utils import DateTimeFactory, dt_form_sys
+from my_tinkoff.api_calls.instruments import get_instrument_by
+from my_tinkoff.csv_candles import CSVCandles
+from my_tinkoff.schemas import Shares
 
 from config import FILEPATH_LOGGER
 from src.my_logging import get_logger
 from src.csv_data import MyCSVData
+from src.strategies.base import MyStrategy
 from src.helpers import get_timeframe_by_candle_interval
 from src.schemas import StrategyResult, StrategiesResults
 
@@ -23,11 +24,8 @@ from src.schemas import StrategyResult, StrategiesResults
 get_logger(FILEPATH_LOGGER)
 
 
-class StrategyLongTrendBreakDown(bt.Strategy):
+class StrategyLongTrendBreakDown(MyStrategy):
     def __init__(self, min_count_bars: int | None = None):
-        self.order = None
-        self.limit_order = None
-        self.trades: list[bt.Trade] = []
         self.closes: bt.LineBuffer = self.data.close
         self.opens: bt.LineBuffer = self.data.open
         self.highs = self.data.high
@@ -36,41 +34,7 @@ class StrategyLongTrendBreakDown(bt.Strategy):
         self.changes: bt.linebuffer.LinesOperation = self.closes - self.opens  # noqa
         self.min_count_bars = min_count_bars
         self.max_count_bars = 0
-
-    def get_max_size(self, price: float) -> int:
-        return self.broker.get_value() // price
-
-    def log(self, txt: str, dt: datetime | None = None):
-        if dt is None:
-            dt = self.datas[0].datetime.datetime(0)
-
-        dt = dt_form_sys.datetime_strf(dt)
-        logging.info(f'{{{dt}}} {{{txt}}}')
-
-    def notify_order(self, order: bt.Order):
-        if order.status in [order.Submitted, order.Accepted]:
-            # Buy/Sell order submitted/accepted to/by broker - Nothing to do
-            return
-
-        # Check if an order has been completed
-        # Attention: broker could reject order if not enough cash
-        if order.status == order.Completed:
-            if order.isbuy():
-                self.log(f'Buy executed | Price={order.executed.price} | Cost={order.executed.value} | '
-                         f'Comm={order.executed.comm}')
-            elif order.issell():
-                self.log(f'Sell executed | Price={order.executed.price} | Cost={order.executed.value} | '
-                         f'Comm={order.executed.comm}')
-        else:
-            self.log(f'Order status: {order.Status[order.status]}')
-
-        # no pending order
-        self.order = None
-
-    def notify_trade(self, trade: bt.Trade):
-        if trade.isclosed:
-            self.trades.append(trade)
-            self.log(f'{trade.pnl=} | {trade.pnlcomm=}')
+        super().__init__()
 
     def next(self):
         if len(self.closes) <= self.min_count_bars:
@@ -171,7 +135,7 @@ async def backtest_one_instrument(
     strats = cerebro.run()
     # logging.info(cerebro.broker.get_value())
     strategy_result = StrategyResult(
-        instrument=instrument,
+        ticker=instrument.ticker,
         start_cash=start_cash,
         trades=strats[0].trades,
         sharpe_ratio=strats[0].analyzers.sharpe.get_analysis()['sharperatio']
@@ -182,7 +146,7 @@ async def backtest_one_instrument(
 
 
 async def main():
-    interval = CandleInterval.CANDLE_INTERVAL_5_MIN
+    interval = CandleInterval.CANDLE_INTERVAL_DAY
     to = DateTimeFactory.now()
     # to -= timedelta(days=365*7)
     from_ = to - timedelta(days=365)

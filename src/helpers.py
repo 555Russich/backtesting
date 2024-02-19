@@ -1,7 +1,7 @@
 from tinkoff.invest import CandleInterval
 from backtrader import TimeFrame
 
-from my_tinkoff_investments.exceptions import UnexpectedCandleInterval
+from my_tinkoff.exceptions import UnexpectedCandleInterval
 
 
 def get_timeframe_by_candle_interval(interval: CandleInterval) -> TimeFrame:

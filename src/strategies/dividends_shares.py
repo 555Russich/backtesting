@@ -1,13 +1,12 @@
-import asyncio
 from datetime import datetime, timedelta
 
-from config import FILEPATH_LOGGER
-from src.my_logging import get_logger, TZ
-from src.api_calls import (
+from my_tinkoff.api_calls.instruments import (
     get_dividends,
     get_shares
 )
-from src.converter import Converter
+from my_tinkoff.converter import quotation2decimal
+
+from src.my_logging import TZ_MOSCOW
 
 YEARS_BACK = 5
 
@@ -31,12 +30,12 @@ async def get_highest_dividends_shares():
             to=datetime.now()
         )
 
-        dt_now = datetime.now(tz=TZ)
+        dt_now = datetime.now(tz=TZ_MOSCOW)
         dt_3_years_ago = dt_now.replace(year=dt_now.year-YEARS_BACK)
         divs_last_3_years = [d for d in dividends if d.last_buy_date > dt_3_years_ago]
 
         if divs_last_3_years and dt_now - divs_last_3_years[-1].last_buy_date < timedelta(days=365):
-            avg_yield = sum([Converter.quotation2decimal(d.yield_value) for d in divs_last_3_years])
+            avg_yield = sum([quotation2decimal(d.yield_value) for d in divs_last_3_years])
             last_pay = divs_last_3_years[-1].last_buy_date.strftime("%d.%m.%Y")
             share_with_div_yield = (share.ticker, round(avg_yield/3, 2), last_pay)
             best_shares_by_divs.append(share_with_div_yield)
@@ -49,9 +48,3 @@ async def get_highest_dividends_shares():
 
 async def main():
     await get_highest_dividends_shares()
-    exit()
-
-
-if __name__ == '__main__':
-    get_logger(FILEPATH_LOGGER)
-    asyncio.run(main())
