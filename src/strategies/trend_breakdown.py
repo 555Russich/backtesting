@@ -15,7 +15,7 @@ from my_tinkoff.schemas import Shares
 
 from config import FILEPATH_LOGGER
 from src.my_logging import get_logger
-from src.csv_data import MyCSVData
+from src.data_feeds import MyCSVData
 from src.strategies.base import MyStrategy
 from src.helpers import get_timeframe_by_candle_interval
 from src.schemas import StrategyResult, StrategiesResults

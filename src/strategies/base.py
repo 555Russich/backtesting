@@ -13,7 +13,6 @@ from my_tinkoff.date_utils import dt_form_sys
 class MyStrategy(Strategy):
     def __init__(self):
         self.order = None
-        self.limit_order = None
         self.trades: list[Trade] = []
 
     def get_max_size(self, price: float) -> int:
@@ -41,7 +40,7 @@ class MyStrategy(Strategy):
                 self.log(f'Sell executed | Price={order.executed.price} | Cost={order.executed.value} | '
                          f'Comm={order.executed.comm}')
         else:
-            self.log(f'Order status: {order.Status[order.status]}')
+            self.log(f'Order status: {order.Status[order.status]} | {order.params=}')
 
         # no pending order
         self.order = None
@@ -49,4 +48,4 @@ class MyStrategy(Strategy):
     def notify_trade(self, trade: Trade):
         if trade.isclosed:
             self.trades.append(trade)
-            self.log(f'{trade.pnl=} | {trade.pnlcomm=}')
+            self.log(f'PnL={round(trade.pnl, 2)} | PnLComm={round(trade.pnlcomm, 2)}')

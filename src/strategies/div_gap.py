@@ -20,7 +20,7 @@ from my_tinkoff.helpers import quotation2decimal
 from my_tinkoff.csv_candles import CSVCandles
 from my_tinkoff.schemas import Shares
 
-from src.csv_data import MyCSVData
+from src.data_feeds import MyCSVData
 from src.helpers import get_timeframe_by_candle_interval
 from src.schemas import StrategyResult, StrategiesResults
 from src.strategies.base import MyStrategy
