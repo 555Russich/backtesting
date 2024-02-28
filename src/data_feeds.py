@@ -1,6 +1,7 @@
+from typing import Self
+
 from my_tinkoff.csv_candles import DELIMITER
 from my_tinkoff.schemas import Candles, Candle
-
 from backtrader import (
     TimeFrame,
     date2num
@@ -25,6 +26,12 @@ class DataFeedCandles(DataBase):
             self.barsize = 32
             self.barfmt = 'IIffffII'
 
+    @classmethod
+    def from_candles(cls, candles: Candles, timeframe: TimeFrame) -> Self:
+        self = cls(timeframe=timeframe)
+        self.candles = candles
+        return self
+
     def _load(self):
         if self.candle_cursor >= len(self.candles)-1:
             return False
@@ -41,10 +48,6 @@ class DataFeedCandles(DataBase):
         self.lines.close[0] = c.close
         self.lines.volume[0] = c.volume
         return True
-
-
-# df = DataFeedCandles().load_candles(1)
-# print(df.lines)
 
 
 class MyCSVData(GenericCSVData):

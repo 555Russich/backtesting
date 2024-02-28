@@ -3,6 +3,8 @@ from collections import UserList
 
 from backtrader import Trade
 
+from src.data_feeds import DataFeedCandles
+
 
 @dataclass
 class StrategyResult:
@@ -73,3 +75,12 @@ class StrategiesResults(UserList[StrategyResult]):
         sharpe_ratios = [r.sharpe_ratio for r in self if r.sharpe_ratio]
         if sharpe_ratios:
             return sum(sharpe_ratios) / len(sharpe_ratios)
+
+    def sort_by_pnl(self) -> None:
+        self.sort(key=lambda x: x.pnlcomm)
+
+
+@dataclass
+class InstrumentData:
+    ticker: str
+    data_feed: DataFeedCandles

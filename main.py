@@ -17,3 +17,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as ex:
         logging.error(ex, exc_info=True)
+        exit(1)

@@ -1,155 +1,127 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from backtrader import (
-    Cerebro,
-    Order,
-    num2date,
-)
-from backtrader.analyzers import SharpeRatio
-from tinkoff.invest import (
-    InstrumentIdType,
-    CandleInterval,
-    Instrument,
-)
-from my_tinkoff.date_utils import DateTimeFactory
-from my_tinkoff.api_calls.instruments import get_instrument_by
-from my_tinkoff.csv_candles import CSVCandles
-from my_tinkoff.schemas import Shares
-from my_tinkoff.enums import Board
+from backtrader import num2date, Sizer
+from tinkoff.invest import InstrumentIdType, CandleInterval, Instrument
+from my_tinkoff.date_utils import DateTimeFactory, TZ_UTC
+from moex_api import MOEX
 
 from src.strategies.base import MyStrategy
-from src.schemas import StrategyResult
-from src.helpers import get_timeframe_by_candle_interval
-from src.data_feeds import MyCSVData, DataFeedCandles
+from src.helpers import pack_instruments_datas
+from src.sizers import MySizer
+from src.multitasking import (
+    async_get_instruments_by_tickers,
+    multiprocessing_get_instruments_data_feeds,
+)
 
 
 class StrategyClosingOnHighs(MyStrategy):
+    params = dict(
+        sizer=None,
+        coeff_change=2,
+        min_days_changes=10,
+        days_look_back=30,
+    )
+
     def __init__(self):
-        self.idx_day = 0
-        self.order_stop = None
-        self.order_take = None
+        self.last_seen_dt: list[int] = [0 for _ in range(len(self.datas))]
+        self.indexes_days: list[int] = [1 for _ in range(len(self.datas))]
+        self.max_highs: list[int | None] = [None for _ in range(len(self.datas))]
+        self.days_changes: list[list[float]] = [[] for _ in range(len(self.datas))]
+        self.indexes_last: list[list[int]] = [[] for _ in range(len(self.datas))]
 
-        self.idx_first_candles: list[int] = []
-        for i in range(1, self.data.buflen()):
-            c1 = num2date(self.data.datetime[i-1])
-            c2 = num2date(self.data.datetime[i])
-            if c2.date() > c1.date():
-                self.idx_first_candles.append(i)
-
-        highs = list(self.data.high)
-        self.day_changes_percent = []
-        self.max_day_changes_percent = []
-        for k in range(1, len(self.idx_first_candles)):
-            idx_first_candle_in_day = self.idx_first_candles[k-1]
-            idx_last_candle_in_day = self.idx_first_candles[k]-1
-            # dt_first_candle_in_day = num2date(self.data.datetime[idx_first_candle_in_day])
-            # dt_last_candle_in_day = num2date(self.data.datetime[idx_last_candle_in_day])
-
-            day_open = self.data.open[idx_first_candle_in_day]
-            day_close = self.data.close[idx_last_candle_in_day]
-            day_high = max(highs[idx_first_candle_in_day:idx_last_candle_in_day+1])
-
-            day_change_percent = (day_close - day_open) / day_open * 100
-            day_max_change_percent = (day_high - day_open) / day_open * 100
-            self.day_changes_percent.append(day_change_percent)
-            self.max_day_changes_percent.append(day_max_change_percent)
-
-            # print(f'{dt_first_candle_in_day} | {dt_last_candle_in_day} | {day_change_percent=} | {day_max_change_percent=}')
-
-        self.idx_first_candles.pop(0)
+        for i, data in enumerate(self.datas):
+            for i_c in range(1, data.buflen()):
+                dt1 = num2date(data.datetime[i_c-1])
+                dt2 = num2date(data.datetime[i_c])
+                if dt2.date() > dt1.date():
+                    self.indexes_last[i].append(i_c-1)
+                    if dt2.minute == 0:
+                        logging.warning(f'No opening auction candle | dt1={dt1} | dt2={dt2}')
         super().__init__()
 
     def next(self):
-        dt = num2date(self.data.datetime[0])
-        if dt.weekday() in [5, 6]:
-            return
-        if self.idx_day >= len(self.idx_first_candles)-1:
-            return
+        for i, data in enumerate(self.datas):
+            indexes_last = self.indexes_last[i]
+            i_day = self.indexes_days[i]
+            days_changes = self.days_changes[i]
 
-        idx = len(self.data) - 1
-        idx_last_candle_in_day = self.idx_first_candles[self.idx_day] - 1
-        # print(f'{idx=} | {idx_last_candle_in_day=} | {self.cursor=}')
+            # escaping index error while iterating on last day
+            if len(indexes_last)-1 == i_day:
+                return
 
-        if idx == idx_last_candle_in_day-2:
-            day_change_percent = self.day_changes_percent[self.idx_day]
-            max_day_change_percent = self.max_day_changes_percent[self.idx_day]
-            self.idx_day += 1
-            if max_day_change_percent > 2 and max_day_change_percent > day_change_percent > 1.7:
-                size = self.get_max_size(self.data.close[0]) // 2
-                self.buy(size=size)
+            i_last_candle = indexes_last[i_day]
+            i_prev_last_candle = indexes_last[i_day - 1]
+            reverse_idx_prev_last = i_prev_last_candle - len(data) - 1
 
-                price_take = self.data.close[0] * (1 + 0.003)
-                price_stop = self.data.close[0] * (1 - 0.003)
-                order_take = self.sell(size=size, price=price_take, exectype=Order.Limit)
-                self.sell(size=size, price=price_stop, oco=order_take, exectype=Order.Stop)
-                self.log(f'max_change={round(max_day_change_percent, 2)} | day_change={round(day_change_percent, 2)} | '
-                         f'price_close={self.data.close[0]} | {price_take=} | {price_stop=}')
-        elif idx > idx_last_candle_in_day:
-            self.idx_day += 1
-        # print(f'{dt} | {self.data.open[0]=} | {self.data.close[0]=}')
+            # escaping index error while iterating on first day
+            if len(data) < i_prev_last_candle:
+                return
 
+            if self.max_highs[i] is None or self.max_highs[i] < data.high[0]:
+                self.max_highs[i] = data.high[0]
 
-async def backtest_one_instrument(
-        instrument: Instrument,
-        start_cash: int,
-        comm: float,
-        from_: datetime,
-        to: datetime,
-        interval: CandleInterval = CandleInterval.CANDLE_INTERVAL_1_MIN
-) -> StrategyResult | None:
-    candles = await CSVCandles.download_or_read(instrument=instrument, from_=from_, to=to, interval=interval)
-    if not candles:
-        return None
-    candles.check_datetime_consistency()
-    candles = candles.remove_weekend_candles()
-    timeframe = get_timeframe_by_candle_interval(interval)
+            position = self.getposition(data)
 
-    cerebro = Cerebro()
-    cerebro.broker.set_cash(start_cash)
-    cerebro.broker.setcommission(comm)
+            if position:
+                if len(data) == i_prev_last_candle + 1 and data.close[0] < data.close[-1]:
+                    self.sell(data=data, size=position.size)
+                elif len(data) == i_prev_last_candle + 2:
+                    self.sell(data=data, size=position.size)
 
-    data = DataFeedCandles(timeframe=timeframe)
-    data.candles = candles
-    cerebro.adddata(data)
+            # self.log(txt=f'{data._name} | {len(data)} | {len(self.indexes_last[i])=} | {i_day=} | {i_last_candle=} '
+            #              f'| {i_prev_last_candle=} | {self.max_highs[i]=} | {data.buflen()=}', data=data)
 
-    cerebro.addanalyzer(SharpeRatio, _name='sharpe')
-    cerebro.addstrategy(StrategyClosingOnHighs)
+            if len(data) in [i_last_candle, i_last_candle - 1]:
+                prev_last_close = data.close[reverse_idx_prev_last]
+                day_change = data.close[0] - prev_last_close
+                percent_day_change = day_change / prev_last_close
 
-    strats = cerebro.run()
-    strategy_result = StrategyResult(
-        ticker=instrument.ticker,
-        start_cash=start_cash,
-        trades=strats[0].trades,
-        sharpe_ratio=strats[0].analyzers.sharpe.get_analysis()['sharperatio']
-    )
-    logging.info(strategy_result)
-    cerebro.plot(style='candlestick')
-    return strategy_result
+                if len(data) == i_last_candle - 1:
+                    if len(days_changes) < self.p.min_days_changes:
+                        return
+                    elif len(days_changes) >= self.p.days_look_back:
+                        using_days_changes = days_changes[len(days_changes)-1-self.p.days_look_back:]
+                    else:
+                        using_days_changes = days_changes
+
+                    average_day_changes = sum([abs(x) for x in using_days_changes]) / len(using_days_changes)
+                    if percent_day_change > average_day_changes * self.p.coeff_change:
+                        self.log(txt=f'{data._name} | percent_day_change={round(percent_day_change*100, 2)} | '
+                                     f'average_day_changes={round(average_day_changes*100, 2)}', data=data)
+                        self.order = self.buy(data=data)
+
+                elif len(data) == i_last_candle:
+                    days_changes.append(percent_day_change)
+                    self.indexes_days[i] += 1
+                    self.max_highs[i] = None
 
 
 async def main():
-    to = DateTimeFactory.now() - timedelta(days=1)
-    # to -= timedelta(days=365*7)
-    from_ = to - timedelta(days=365)
-    print(f'FROM={from_} | TO={to}')
-    start_cash = 100_000
-    comm = .0004
+    to = datetime(year=2024, month=2, day=23, tzinfo=TZ_UTC)
+    from_ = datetime(year=2022, month=4, day=1, tzinfo=TZ_UTC)
+    coeff_change = 2
+    min_days_changes = 10
+    days_look_back = 30
+    trade_max_size = 0.1
+    logging.info(f'from_={from_} | to={to} | {coeff_change=} | {min_days_changes=} | {days_look_back=} | {trade_max_size=}')
 
-    instrument = await get_instrument_by(
-        id='BELU',
-        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
-        class_code=Board.TQBR
-    )
-    print(instrument.first_1min_candle_date)
-    await backtest_one_instrument(
-        instrument=instrument,
-        start_cash=start_cash,
-        comm=comm,
-        # from_=instrument.first_1min_candle_date,
-        from_=from_,
-        to=to,
-    )
+    async with MOEX() as moex:
+        tickers = await moex.get_index_composition('IMOEX')
+    # tickers = tickers[:3]
 
-    # instruments = Shares.from_board(Board.TQBR)
-    # for instrument
+    instruments = await async_get_instruments_by_tickers(tickers=tickers)
+    logging.info(f'Got {len(instruments)} instruments')
+    data_feeds = multiprocessing_get_instruments_data_feeds(instruments=instruments, from_=from_, to=to,
+                                                            interval=CandleInterval.CANDLE_INTERVAL_1_MIN)
+    instruments_datas = pack_instruments_datas(instruments=instruments, data_feeds=data_feeds)
+    logging.info(f'Packed {len(instruments_datas)} data feeds')
+
+    StrategyClosingOnHighs.backtest_instruments_together(
+        instruments_datas=instruments_datas,
+        is_plotting=False,
+        min_days_changes=min_days_changes,
+        coeff_change=coeff_change,
+        days_look_back=days_look_back,
+        sizer=MySizer(trade_max_size=trade_max_size)
+    )
