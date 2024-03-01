@@ -3,43 +3,68 @@ from typing import Literal
 import logging
 
 from backtrader import (
-    num2date,
     Strategy,
     Trade,
     Order,
-    Cerebro
+    Cerebro,
+    TimeFrame
 )
-from backtrader.analyzers import SharpeRatio
+from backtrader.analyzers import (
+    SharpeRatio,
+    AnnualReturn,
+    TimeDrawDown,
+    PeriodStats,
+    TradeAnalyzer,
+)
 from backtrader.utils.py3 import string_types
 from my_tinkoff.date_utils import dt_form_sys
 
 from src.schemas import StrategyResult, InstrumentData
 from src.data_feeds import DataFeedCandles
+from src.typed_dicts import (
+    ParamsSharpe,
+    ParamsPeriodStats,
+    AnalysisSharpe,
+    AnalysisDrawDown,
+    AnalysisPeriodStats,
+)
 
 
 BuyOrSell = Literal['buy', 'sell']
 
 
 class MyStrategy(Strategy):
-    START_CASH: int = 100_000
+    START_CASH: int = 1_000_000
     COMMISSION: float = .0004
+    LOGGING: bool = True
+    PLOTTING: bool = False
+    USING_CORES: int = cpu_count() // 4 * 3
+
+    params_sharpe = ParamsSharpe(
+        timeframe=TimeFrame.Days,
+        compression=1,
+        riskfreerate=0,
+        factor=None,
+        convertrate=True,
+        annualize=True,
+        stddev_sample=False,
+    )
+    params_period_stats = ParamsPeriodStats(
+        timeframe=TimeFrame.Months,
+        compression=1,
+        fund=None,
+    )
 
     def __init__(self):
         self.cheating = self.cerebro.p.cheat_on_open
         if self.p.sizer is not None:
             self.sizer = self.p.sizer
 
-        # self.balance: float = self.START_CASH
         self.order = None
         self.trades: list[Trade] = []
 
     @classmethod
-    def backtest_instruments_together(
-            cls,
-            instruments_datas: list[InstrumentData],
-            is_plotting: bool = False,
-            **params
-    ) -> StrategyResult:
+    def backtest_instruments_together(cls, instruments_datas: list[InstrumentData], **params) -> StrategyResult:
         cerebro = cls._prepare_cerebro()
         cerebro.addstrategy(cls, **params)
 
@@ -47,17 +72,29 @@ class MyStrategy(Strategy):
             cerebro.adddata(data=instrument_data.data_feed, name=instrument_data.ticker)
 
         strats = cerebro.run()
+        analyzers = strats[0].analyzers
+        sharpe = analyzers.sharpe
+        sharpe_analysis = AnalysisSharpe(ratio=sharpe.ratio, risk_free_rate=sharpe.p.riskfreerate)
+        annual_return_analysis = analyzers.annual_return.get_analysis()
+        drawdown = analyzers.drawdown.get_analysis()
+        drawdown_analysis = AnalysisDrawDown(percent=drawdown['maxdrawdown'], length=drawdown['maxdrawdownperiod'])
+        period_stats_analysis = analyzers.period_stats.get_analysis()
+        period_stats = AnalysisPeriodStats(timeframe=cls.params_period_stats['timeframe'], **period_stats_analysis)
+        trade_analyzer = analyzers.trade_analyzer.get_analysis()
+
         strategy_result = StrategyResult(
             ticker='+'.join([instr.ticker for instr in instruments_datas]),
             start_cash=cls.START_CASH,
             trades=strats[0].trades,
-            sharpe_ratio=strats[0].analyzers.sharpe.get_analysis()['sharperatio']
+            sharpe=sharpe_analysis,
+            drawdown=drawdown_analysis,
+            annual_return=annual_return_analysis,
+            period_stats=period_stats,
+            trade_analyzer=trade_analyzer
         )
-        logging.info(strategy_result)
+        logging.info(f'\n{strategy_result}')
 
-        if is_plotting:
-            cerebro.plot(style='candlestick')
-
+        cerebro.plot(style='candlestick') if cls.PLOTTING else None
         return strategy_result
 
     @classmethod
@@ -86,6 +123,9 @@ class MyStrategy(Strategy):
         return self.broker.get_value() // price
 
     def log(self, txt: str, data: DataFeedCandles | None = None):
+        if not self.LOGGING:
+            return
+
         if data is None:
             data = self.data
 
@@ -132,7 +172,7 @@ class MyStrategy(Strategy):
             dt = data.datetime[0]
             for order in self.broker.orders:
                 if data._name == order.data._name and order.alive() and order.created.dt == dt:
-                    logging.debug(f'{data._name} | Duplicated order will be rejected | dt={num2date(dt)}')
+                    self.log(f'{data._name} | Duplicated order will be rejected', data=data)
                     return
 
             return func(
@@ -147,9 +187,14 @@ class MyStrategy(Strategy):
 
     @classmethod
     def _prepare_cerebro(cls) -> Cerebro:
-        core_numbers = cpu_count() // 4 * 3
-        cerebro = Cerebro(maxcpus=core_numbers)
+        cerebro = Cerebro(maxcpus=cls.USING_CORES)
         cerebro.broker.set_cash(cls.START_CASH)
         cerebro.broker.setcommission(cls.COMMISSION)
-        cerebro.addanalyzer(SharpeRatio, _name='sharpe')
+
+        cerebro.addanalyzer(SharpeRatio, _name='sharpe', **cls.params_sharpe)
+        cerebro.addanalyzer(AnnualReturn, _name='annual_return')
+        cerebro.addanalyzer(TimeDrawDown, _name='drawdown')
+        cerebro.addanalyzer(PeriodStats, _name='period_stats', **cls.params_period_stats)
+        cerebro.addanalyzer(TradeAnalyzer, _name='trade_analyzer')
+
         return cerebro

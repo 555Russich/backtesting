@@ -12,9 +12,12 @@ class MySizer(Sizer):
 
         if cash < value * self.p.trade_max_size:
             size = cash // price * 0.9
-            logging.debug(f"{data._name} | cash={round(cash, 2)} | value={round(value, 2)} | {price=} | size={round(size, 2)}")
+            logging.debug(f"{data._name} | cash={round(cash, 2)} | value={round(value, 2)} | {price=} | size="
+                          f"{round(size, 2)}")
         elif cash <= value:
             size = cash // price * self.p.trade_max_size
         else:
+            # it probably means short position
             raise Exception(f"{data._name} | cash={round(cash, 2)} | value={round(value, 2)} | {price=} | size=None")
+
         return size
