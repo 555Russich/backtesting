@@ -23,10 +23,10 @@ from my_tinkoff.schemas import Shares
 from src.data_feeds import MyCSVData
 from src.helpers import get_timeframe_by_candle_interval
 from src.schemas import StrategyResult, StrategiesResults
-from src.strategies.base import MyStrategy
+from src.strategies.base import BaseStrategy
 
 
-class StrategyDivGap(MyStrategy):
+class StrategyDivGap(BaseStrategy):
     def __init__(self, dividends: list[Dividend], count_days: int, percent_min_div_yield: float):
         self.order = None
         self.limit_order = None
@@ -144,7 +144,7 @@ async def main():
             strategies_results.append(strategy_result)
 
     results_with_trades = [r for r in strategies_results if r.trades]
-    results_sorted_by_successful_trades = sorted(results_with_trades, key=lambda x: x.pnlcomm)
+    results_sorted_by_successful_trades = sorted(results_with_trades, key=lambda x: x.pnl_net)
     for s in results_sorted_by_successful_trades:
         print(s)
         print()

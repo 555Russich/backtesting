@@ -3,7 +3,7 @@ import logging
 from backtrader import Sizer
 
 
-class MySizer(Sizer):
+class SizerPercentOfCash(Sizer):
     params = (('trade_max_size', 0.1),)
 
     def _getsizing(self, comminfo, cash, data, isbuy):
@@ -18,6 +18,7 @@ class MySizer(Sizer):
             size = cash // price * self.p.trade_max_size
         else:
             # it probably means short position
+            return 0
             raise Exception(f"{data._name} | cash={round(cash, 2)} | value={round(value, 2)} | {price=} | size=None")
 
         return size

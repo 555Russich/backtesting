@@ -1,18 +1,18 @@
-from typing import TypedDict
+from typing import TypedDict, Iterable
 
 from backtrader import TimeFrame
 
-from src.sizers import MySizer
+from src.sizers import SizerPercentOfCash
 
 
 class ParamsClosingOnHighs(TypedDict):
-    sizer: MySizer | None
-    c_day_change: float
-    c_nearly_to_high: float
-    min_days_changes: int
-    days_look_back: int
-    trade_end_of_main_session: bool
-    trade_end_of_evening_session: bool
+    sizer: SizerPercentOfCash | None
+    c_day_change: float | Iterable[float]
+    c_nearly_to_high: float | Iterable[float]
+    days_look_back: int | Iterable[int]
+    take_stop: tuple[float, float] | Iterable[tuple[float, float]]
+    trade_end_of_main_session: bool | Iterable[bool]
+    trade_end_of_evening_session: bool | Iterable[bool]
 
 
 class ParamsSharpe(TypedDict):

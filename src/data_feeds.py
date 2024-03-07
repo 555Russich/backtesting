@@ -12,7 +12,7 @@ from backtrader.feeds import DataBase, GenericCSVData
 class DataFeedCandles(DataBase):
     def __init__(self):
         super(DataFeedCandles, self).__init__()
-        self.candle_cursor = 0
+        self.candle_cursor = None
         self.candles: Candles
 
         # Use the informative "timeframe" parameter to understand if the
@@ -31,6 +31,10 @@ class DataFeedCandles(DataBase):
         self = cls(timeframe=timeframe)
         self.candles = candles
         return self
+
+    def start(self) -> None:
+        super(DataFeedCandles, self).start()
+        self.candle_cursor = 0
 
     def _load(self):
         if self.candle_cursor >= len(self.candles)-1:
