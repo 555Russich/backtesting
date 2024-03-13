@@ -1,8 +1,7 @@
 from dataclasses import dataclass
-from collections import UserList
 from typing import Type, Any
 
-from backtrader import Trade, TimeFrame
+from backtrader import TimeFrame
 
 from src.data_feeds import DataFeedCandles
 from src.typed_dicts import (
@@ -10,7 +9,8 @@ from src.typed_dicts import (
     AnalysisDrawDown,
     AnalysisPeriodStats
 )
-from strategies.base import BaseStrategy
+from src.strategies.base import BaseStrategy
+from src.params import AnyParamsStrategy
 
 
 @dataclass
@@ -86,51 +86,9 @@ class StrategyResult:
     def count_lost(self) -> int:
         return self.trade_analyzer['lost']['total']
 
-
     @property
     def percent_successful_trades(self) -> float:
         return self.count_won / (self.count_won + self.count_lost)
-
-
-class StrategiesResults(UserList[StrategyResult]):
-
-    def __repr__(self) -> str:
-        return (
-            f'Cumulative of {len(self)} strategies results\n'
-            f'PnL: {round(self.pnlcomm, 2)} | {round(self.pnlcomm_percent*100, 2)}%\n'
-            f'{self.count_successful_trades}/{len(self.trades)} successful trades | {round(self.percent_successful_trades*100, 2) if self.percent_successful_trades else None}%\n'
-            f'Average Sharpe Ratio: {round(self.sharpe_ratio, 2) if self.sharpe_ratio else None}'
-        )
-
-    @property
-    def pnlcomm(self) -> float:
-        return sum([r.pnl_net for r in self])
-
-    @property
-    def pnlcomm_percent(self) -> float:
-        return sum([r.pnl_net_percent for r in self])
-
-    @property
-    def trades(self) -> list[Trade]:
-        return [t for r in self for t in r.trades]
-
-    @property
-    def count_successful_trades(self) -> int:
-        return len([1 for t in self.trades if t.pnlcomm > 0])
-
-    @property
-    def percent_successful_trades(self) -> float | None:
-        if self.trades:
-            return self.count_successful_trades / len(self.trades)
-
-    @property
-    def sharpe_ratio(self) -> float | None:
-        sharpe_ratios = [r.sharpe_ratio for r in self if r.sharpe_ratio]
-        if sharpe_ratios:
-            return sum(sharpe_ratios) / len(sharpe_ratios)
-
-    def sort_by_pnl(self) -> None:
-        self.sort(key=lambda x: x.pnl_net)
 
 
 @dataclass
@@ -142,15 +100,4 @@ class InstrumentData:
 @dataclass
 class StrategyData:
     strategy: Type[BaseStrategy]
-    params: dict[str, Any]
-
-
-@dataclass
-class ParamsTest:
-    sizer = None
-    c_day_change: int = 3
-    c_nearly_to_high: int = 0.7
-    take_stop: tuple = (.003, .003)
-    days_look_back: int = 30
-    trade_end_of_main_session: bool = True
-    trade_end_of_evening_session: bool = True
+    params: AnyParamsStrategy

@@ -7,12 +7,11 @@ from backtrader.analyzers import SharpeRatio, AnnualReturn, TimeDrawDown, Period
 from src.schemas import InstrumentData
 from src.strategies.base import BaseStrategy
 from src.schemas import StrategyData, StrategyResult
+from src.params import ParamsSharpe, ParamsPeriodStats
 from src.typed_dicts import (
     AnalysisSharpe,
     AnalysisDrawDown,
     AnalysisPeriodStats,
-    ParamsSharpe,
-    ParamsPeriodStats,
 )
 
 
@@ -49,11 +48,14 @@ class Backtester:
         cerebro = self._setup_cerebro()
 
         for sd in self._strategies_data:
-            # for k, v in sd.params.items():
-            #     if isinstance(v, (list, tuple)):
-            #         raise Exception(f'Parameter {k} has iterable value: {v}')
+            for k, v in sd.params:
+                if isinstance(v, list):
+                    if len(v) == 1:
+                        setattr(sd.params, k, v[0])
+                    else:
+                        raise Exception(f'Parameter {k} has list value: {v}')
 
-            cerebro.addstrategy(sd.strategy, **sd.params)
+            cerebro.addstrategy(sd.strategy, **sd.params.__dict__)
         for instrument_data in self._instruments_data:
             cerebro.adddata(data=instrument_data.data_feed, name=instrument_data.ticker)
 
@@ -75,7 +77,7 @@ class Backtester:
         for sd in self._strategies_data:
             for instrument_data in self._instruments_data:
                 cerebro.adddata(data=instrument_data.data_feed, name=instrument_data.ticker)
-            cerebro.optstrategy(sd.strategy, **sd.params)
+            cerebro.optstrategy(sd.strategy, **sd.params.__dict__)
 
         strategies = cerebro.run(maxcpus=self.CPU_CORES_COUNT)
 
@@ -93,17 +95,17 @@ class Backtester:
         cerebro = Cerebro()
         cerebro.broker.set_cash(cls.START_CASH)
         cerebro.broker.setcommission(commission=cls.COMMISSION)
-        cerebro.addanalyzer(SharpeRatio, _name='sharpe', **cls.params_sharpe)
+        cerebro.addanalyzer(SharpeRatio, _name='sharpe', **cls.params_sharpe.__dict__)
         cerebro.addanalyzer(AnnualReturn, _name='annual_return')
         cerebro.addanalyzer(TimeDrawDown, _name='drawdown')
-        cerebro.addanalyzer(PeriodStats, _name='period_stats', **cls.params_period_stats)
+        cerebro.addanalyzer(PeriodStats, _name='period_stats', **cls.params_period_stats.__dict__)
         cerebro.addanalyzer(TradeAnalyzer, _name='trade_analyzer')
         return cerebro
 
     @classmethod
     def _get_strategy_result(
             cls,
-            strategy: Type[BaseStrategy],
+            strategy: BaseStrategy,
             ticker: str,
             opt_return: OptReturn | None = None
     ) -> StrategyResult:
@@ -114,14 +116,14 @@ class Backtester:
 
         dd = a.drawdown.get_analysis()
         return StrategyResult(
-            strategy=strategy,
+            strategy=strategy.__class__,
             ticker=ticker,
             start_cash=cls.START_CASH,
             sharpe=AnalysisSharpe(ratio=a.sharpe.ratio, risk_free_rate=a.sharpe.p.riskfreerate),
             drawdown=AnalysisDrawDown(percent=dd['maxdrawdown'], length=dd['maxdrawdownperiod']),
             annual_return=a.annual_return.get_analysis(),
             period_stats=AnalysisPeriodStats(
-                timeframe=cls.params_period_stats['timeframe'],
+                timeframe=cls.params_period_stats.timeframe,
                 **a.period_stats.get_analysis()
             ),
             trade_analyzer=a.trade_analyzer.get_analysis()

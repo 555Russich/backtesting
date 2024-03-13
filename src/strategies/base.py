@@ -24,6 +24,36 @@ class BaseStrategy(Strategy):
         if self.p.sizer is not None:
             self.sizer = self.p.sizer
 
+    def notify_order(self, order: Order):
+        if order.status in [order.Submitted, order.Accepted]:
+            # Buy/Sell order submitted/accepted to/by broker - Nothing to do
+            return
+
+        # Check if an order has been completed
+        # Attention: broker could reject order if not enough cash
+        if order.status == order.Completed:
+            buy_or_sell = 'Buy' if order.isbuy() else 'Sell'
+            self.log(f'{buy_or_sell} executed | Price={order.executed.price} | Cost='
+                     f'{round(order.executed.value, 2)} | Comm={round(order.executed.comm, 2)}', data=order.data)
+        else:
+            self.log(f'Order status: {order.getstatusname()} | value={round(self.broker.get_value(), 2)} | '
+                     f'cash={round(self.broker.get_cash(), 2)}', data=order.data)
+
+    def notify_trade(self, trade: Trade):
+        if trade.isclosed:
+            self.log(f'PnL={round(trade.pnl, 2)} | PnLComm={round(trade.pnlcomm, 2)}', data=trade.data)
+
+    def log(self, txt: str, data: DataFeedCandles | None = None):
+        if not self.LOGGING:
+            return
+
+        if data is None:
+            data = self.data
+
+        dt = data.datetime.datetime(0)
+        dt = dt_form_sys.datetime_strf(dt)
+        logging.info(f'{{{dt}}} | {data._name} | {{{txt}}}')
+
     def buy(self, data=None, size=None, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None,
             trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs
             ) -> Order | None:
@@ -41,36 +71,6 @@ class BaseStrategy(Strategy):
             tradeid=tradeid, oco=oco, trailamount=trailamount, trailpercent=trailpercent, parent=parent,
             transmit=transmit, **kwargs
         )
-
-    def log(self, txt: str, data: DataFeedCandles | None = None):
-        if not self.LOGGING:
-            return
-
-        if data is None:
-            data = self.data
-
-        dt = data.datetime.datetime(0)
-        dt = dt_form_sys.datetime_strf(dt)
-        logging.info(f'{{{dt}}} {{{txt}}}')
-
-    def notify_order(self, order: Order):
-        if order.status in [order.Submitted, order.Accepted]:
-            # Buy/Sell order submitted/accepted to/by broker - Nothing to do
-            return
-
-        # Check if an order has been completed
-        # Attention: broker could reject order if not enough cash
-        name = order.data._name
-        if order.status == order.Completed:
-            buy_or_sell = 'Buy' if order.isbuy() else 'Sell'
-            self.log(f'{name} | {buy_or_sell} executed | Price={order.executed.price} | Cost='
-                     f'{round(order.executed.value, 2)} | Comm={round(order.executed.comm, 2)}')
-        # else:
-        #     self.log(f'{name} | Order status: {order.getstatusname()} | {self.broker.get_value()=} | {self.broker.get_cash()=}')
-
-    def notify_trade(self, trade: Trade):
-        if trade.isclosed:
-            self.log(f'{trade.data._name} | PnL={round(trade.pnl, 2)} | PnLComm={round(trade.pnlcomm, 2)}')
 
     def _buy_or_sell(self, buy_or_sell: BuyOrSell, data=None, size=None, price=None, plimit=None, exectype=None,
                      valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True,
