@@ -37,7 +37,7 @@ class StrategyClosingOnHighs(BaseStrategy):
 
     def __init__(self):
         self.i = 0
-        self.last_seen_dt: list[datetime | None] = [None for _ in range(len(self.datas))]
+        self.last_seen_dt: list[float | None] = [None for _ in range(len(self.datas))]
         self.indexes_days: list[int] = [1 for _ in range(len(self.datas))]
         self.max_highs: list[int | None] = [None for _ in range(len(self.datas))]
         self.days_changes: list[list[float]] = [[] for _ in range(len(self.datas))]
@@ -60,7 +60,7 @@ class StrategyClosingOnHighs(BaseStrategy):
             try:
                 self._process_data(data)
             except SkipIteration:
-                return
+                continue
 
     def _process_data(self, data) -> None:
         i = self.i
@@ -94,16 +94,9 @@ class StrategyClosingOnHighs(BaseStrategy):
             self.indexes_days[i] += 1
             self.max_highs[i] = None
 
-        self.log(txt=f'dt_last_seen={self.last_seen_dt[i]} | {len(data)} | {len(self.indexes_last[i])=} | {i_day=} | '
-                     f'{i_last_candle=} | {i_prev_last_candle=} | {self.max_highs[i]=} | {data.buflen()=}', data=data)
-
-        if data._name == 'MAGN' and dt.year == 2018 and dt.month == 10 and dt.day == 2 and dt.hour == 15 and dt.minute == 47:
-            pass
-
-        # if self.last_seen_dt[i] and dt <= self.last_seen_dt[i]:
-        #     self.log(f'Skipping...', data=data)
-        #     raise SkipIteration
-        # self.last_seen_dt[i] = dt
+        if self.last_seen_dt[i] and data.datetime[0] <= self.last_seen_dt[i]:
+            raise SkipIteration
+        self.last_seen_dt[i] = data.datetime[0]
 
         if self.max_highs[i] is None or self.max_highs[i] < data.high[0]:
             self.max_highs[i] = data.high[0]
@@ -160,9 +153,9 @@ async def backtest(from_: datetime, to: datetime, params_strategy: ParamsClosing
 
 
 async def optimize(from_: datetime, to: datetime, params_strategy: ParamsClosingOnHighs) -> None:
-    # async with MOEX() as moex:
-    #     tickers = await moex.get_index_composition('IMOEX')
-    tickers = ['MAGN']
+    async with MOEX() as moex:
+        tickers = await moex.get_index_composition('IMOEX')
+    # tickers = ['SBER', 'MAGN']
 
     instruments = [i for i in await async_get_instruments_by_tickers(tickers=tickers)
                    if i.first_1min_candle_date <= from_]
@@ -182,15 +175,21 @@ async def optimize(from_: datetime, to: datetime, params_strategy: ParamsClosing
 async def main():
     to = datetime(year=2024, month=2, day=23, tzinfo=TZ_UTC)
     # from_ = datetime(year=2023, month=1, day=1, tzinfo=TZ_UTC)
+
+    # to = datetime(year=2018, month=10, day=5, tzinfo=TZ_UTC)
     from_ = datetime(year=2018, month=3, day=8, tzinfo=TZ_UTC)
 
     Backtester.LOGGING = True
     # Backtester.PLOTTING = True
     params_strategy = ParamsClosingOnHighs(
         sizer=SizerPercentOfCash(trade_max_size=0.05),
-        c_day_change=0,
+        c_day_change=4,
         c_nearly_to_high=0.5,
-        take_stop=[(.003, .001)],
+        take_stop=[
+            (.003, .0005),
+            (.003, .001),
+            (.003, .0015)
+        ],
         days_look_back=60,
         trade_end_of_main_session=True,
         trade_end_of_evening_session=True
