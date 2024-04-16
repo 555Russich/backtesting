@@ -7,6 +7,7 @@ from src.my_logging import get_logger
 
 async def main():
     from src.strategies.closing_on_highs import main as submain
+    # from src.strategies.pair_spread import main as submain
     await submain()
 
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Type, Any
+from typing import Type
 
 from backtrader import TimeFrame
 
@@ -27,13 +27,12 @@ class StrategyResult:
     def __repr__(self) -> str:
         pd = self.period_stats
         ta = self.trade_analyzer
-        tt = ta['total']['total']
-        if tt == 0:
+        if ta['total']['total'] == 0:
             return '0 Trades by this strategy'
 
         rows = (
             # '-' * 30,
-            f'Strategy class: {self.strategy.__class__.__name__}',
+            f'Strategy class: {self.strategy.__name__}',
             f'Ticker: {self.ticker}',
             f'PnL: {round(self.pnl_net_percent * 100, 2)}% | {round(self.pnl_net, 2)}',
             f'Winrate: {round(self.percent_successful_trades*100, 2)}% | Won {self.count_won}/{self.count_won + self.count_lost}',

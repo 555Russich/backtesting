@@ -19,12 +19,15 @@ class ParamsSizerPercentOfCash(_Iterable):
 
 @dataclass
 class ParamsClosingOnHighs(_Iterable):
-    c_day_change: list[int] | int
-    c_nearly_to_high: float | list[float]
+    c_price_change: list[int] | int
+    c_volume_change: list[int] | int
+    c_from_low: float | list[float]
+    c_from_high: float | list[float]
     take_stop: tuple[float, float] | list[tuple[float, float]]
     days_look_back: int | list[int]
     trade_end_of_main_session: bool | list[bool]
     trade_end_of_evening_session: bool | list[bool]
+    trade_before_weekends: bool | list[bool]
     sizer: S | None
 
 

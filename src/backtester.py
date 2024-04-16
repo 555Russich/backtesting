@@ -1,8 +1,8 @@
 import logging
-from typing import Type
 
 from backtrader import Cerebro, OptReturn, TimeFrame
 from backtrader.analyzers import SharpeRatio, AnnualReturn, TimeDrawDown, PeriodStats, TradeAnalyzer
+from btplotting import BacktraderPlotting
 
 from src.schemas import InstrumentData
 from src.strategies.base import BaseStrategy
@@ -68,6 +68,8 @@ class Backtester:
             results.append(res)
 
             if self.PLOTTING:
+                # plotter = BacktraderPlotting(style='bar')
+                # cerebro.plot(plotter)
                 cerebro.plot(style='candlestick')
         return results
 
@@ -85,7 +87,7 @@ class Backtester:
         for strategy in strategies:
             for opt_return in strategy:
                 ticker = '+'.join([instr.ticker for instr in self._instruments_data])
-                res = self._get_strategy_result(strategy=strategy, opt_return=opt_return, ticker=ticker)
+                res = self._get_strategy_result(strategy=strategy.__class__, opt_return=opt_return, ticker=ticker)
                 logging.info(f'\nparams={opt_return.params.__dict__}\n{res}')
                 results.append(res)
         return results
@@ -94,7 +96,7 @@ class Backtester:
     def _setup_cerebro(cls) -> Cerebro:
         cerebro = Cerebro()
         cerebro.broker.set_cash(cls.START_CASH)
-        cerebro.broker.setcommission(commission=cls.COMMISSION)
+        cerebro.broker.setcommission(commission=cls.COMMISSION, leverage=1)
         cerebro.addanalyzer(SharpeRatio, _name='sharpe', **cls.params_sharpe.__dict__)
         cerebro.addanalyzer(AnnualReturn, _name='annual_return')
         cerebro.addanalyzer(TimeDrawDown, _name='drawdown')
@@ -109,11 +111,7 @@ class Backtester:
             ticker: str,
             opt_return: OptReturn | None = None
     ) -> StrategyResult:
-        if opt_return:
-            a = opt_return.analyzers
-        else:
-            a = strategy.analyzers
-
+        a = opt_return.analyzers if opt_return else strategy.analyzers
         dd = a.drawdown.get_analysis()
         return StrategyResult(
             strategy=strategy.__class__,
