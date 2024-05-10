@@ -1,153 +1,173 @@
 import logging
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 
 from tinkoff.invest import (
     CandleInterval,
     Instrument,
     Dividend,
-    InstrumentIdType
+    InstrumentIdType,
+    Quotation
 )
-from moex_api import MOEX
-from backtrader import (
-    Trade,
-    Cerebro,
-)
-from backtrader.analyzers import SharpeRatio
-
-from my_tinkoff.date_utils import DateTimeFactory
-from my_tinkoff.api_calls.instruments import get_dividends, get_instrument_by
+from my_tinkoff.date_utils import DateTimeFactory, TZ_UTC
+from my_tinkoff.api_calls.instruments import get_dividends
 from my_tinkoff.helpers import quotation2decimal
-from my_tinkoff.csv_candles import CSVCandles
-from my_tinkoff.schemas import Shares
 
-from src.data_feeds import MyCSVData
-from src.helpers import get_timeframe_by_candle_interval
-from src.schemas import StrategyResult, StrategiesResults
+from src.multitasking import async_get_instruments_by_tickers
+from src.helpers import get_data_feed
+from src.schemas import StrategyData, InstrumentData
+from src.backtester import Backtester
 from src.strategies.base import BaseStrategy
+from src.params import ParamsDivGap
+from src.sizers import SizerPercentOfCash
+
+
+@dataclass
+class DividendDeviation:
+    last_buy_date: datetime
+    price_close: float
+    percent_yield: float
+    price_next: float | None = None
+
+    @property
+    def true_price(self) -> float:
+        return self.price_close * (1 - (self.percent_yield * 0.87))
+
+    @property
+    def deviation(self) -> float:
+        return (self.price_next - self.true_price) / self.true_price
 
 
 class StrategyDivGap(BaseStrategy):
-    def __init__(self, dividends: list[Dividend], count_days: int, percent_min_div_yield: float):
-        self.order = None
-        self.limit_order = None
-        self.trades: list[Trade] = []
+    params = ParamsDivGap(
+        sizer=SizerPercentOfCash(trade_max_size=.05),
+        percent_min_div_yield=0
+    )
 
-        self.changes: bt.linebuffer.LinesOperation = self.data.close - self.data.open  # noqa
-        self.count_days = count_days
-        self.dividends_dates = []
-        for d in dividends:
-            percent_yield = quotation2decimal(d.yield_value)
-            if percent_yield > percent_min_div_yield:
-                self.dividends_dates.append(d.last_buy_date.date())
-
+    def __init__(self, dividends: list[Dividend]):
+        first_candle_dt = self.data.datetime.date(1)
+        self.dividends = [d for d in dividends if d.last_buy_date.date() >= first_candle_dt]
+        self._dividends = self.dividends.copy()
+        self.results: list[DividendDeviation] = []
         super().__init__()
 
     def next(self):
-        if self.position:
-            if self.position.size < 0:
-                self.buy(size=self.position.size)
-            elif self.position.size > 0:
-                self.sell(size=self.position.size)
+        date = self.data.datetime.date(0)
+        prev_date = self.data.datetime.date(-1)
 
-        date = self.data.datetime.datetime(0).date()
-        if date in self.dividends_dates:
-            size = self.get_max_size(price=self.data.close) // 2
-            self.order = self.sell(size=size)
+        if self.dividends:
+            closest_div = self.dividends[0]
+            div_date = closest_div.last_buy_date.date()
+        else:
+            div_date = self.results[-1].last_buy_date
 
+        # print(f'prev_date={prev_date} | date={date} | div_date={div_date}')
+        if date == div_date:
+            dd = DividendDeviation(
+                last_buy_date=date,
+                price_close=self.data.close[0],
+                percent_yield=quotation2decimal(closest_div.yield_value) / 100,
+            )
+            self.results.append(dd)
+        elif prev_date == div_date:
+            dd = self.results[-1]
+            dd.price_next = self.data.open[0]
+            self.dividends.pop(0)
 
-async def backtest_one_instrument(
-        instrument: Instrument,
-        start_cash: int,
-        comm: float,
-        from_: datetime,
-        to: datetime,
-        interval: CandleInterval,
-        count_days: int,
-        percent_min_div_yield: float
-) -> StrategyResult | None:
-    candles = await CSVCandles.download_or_read(instrument=instrument, from_=from_, to=to, interval=interval)
-    dividends = await get_dividends(instrument=instrument, from_=from_, to=to)
-    if not candles or not dividends:
-        return None
-    candles.check_datetime_consistency()
+        if len(self.data) == self.data.buflen():
+            dd_dates = [d.last_buy_date.date() for d in self._dividends]
+            res_dates = [r.last_buy_date for r in self.results]
+            for dd_date in dd_dates:
+                assert dd_date in res_dates, dd_date
 
-    cerebro = Cerebro()
-    cerebro.broker.set_cash(start_cash)
-    cerebro.broker.setcommission(comm)
+            for r in self.results:
+                assert r.last_buy_date in dd_dates
+                assert r.price_next, r
+                assert r.deviation, r
 
-    filepath = CSVCandles.get_filepath(instrument, interval=interval)
-    timeframe = get_timeframe_by_candle_interval(interval)
-    data = MyCSVData(dataname=filepath, fromdate=from_, todate=to, timeframe=timeframe)
-    cerebro.adddata(data)
+            assert len(self.results) == len(self._dividends), \
+                f'{len(self.results)=} | {len(self._dividends)=}'
 
-    cerebro.addanalyzer(SharpeRatio, _name='sharpe')
-    cerebro.addstrategy(
-        strategy=StrategyDivGap,
-        count_days=count_days,
-        dividends=dividends,
-        percent_min_div_yield=percent_min_div_yield
-    )
+async def backtest(from_: datetime, to: datetime, params_strategy: ParamsDivGap):
+    # async with MOEX() as moex:
+    #     tickers = await moex.get_index_composition('IMOEX')
+    tickers = ['LKOH']
 
-    strats = cerebro.run()
-    strategy_result = StrategyResult(
-        ticker=instrument.ticker,
-        start_cash=start_cash,
-        trades=strats[0].trades,
-        sharpe_ratio=strats[0].analyzers.sharpe.get_analysis()['sharperatio']
-    )
-    logging.info(strategy_result)
-    cerebro.plot(style='candlestick')
-    return strategy_result
+    deviations = {}
+    instruments = await async_get_instruments_by_tickers(tickers=tickers)
+
+    for instrument in instruments:
+        # if instrument.first_1day_candle_date <= from_:
+        #     print(f'{instrument.ticker} | first_candle={instrument.first_1day_candle_date} < from_={from_}')
+
+        # print(instrument)
+        dividends = await get_dividends(instrument_id=instrument.uid, from_=from_, to=to)
+        if not dividends:
+            continue
+        dividends.sort(key=lambda x: x.last_buy_date)
+
+        for d in dividends:
+            if instrument.ticker == 'MGNT':
+                if d.last_buy_date.date() == datetime(2021, 1, 6).date():
+                    d.last_buy_date = datetime(2021, 1, 5, 0, 0)
+                elif d.last_buy_date.date() == datetime(2019, 6, 12).date():
+                    d.last_buy_date = datetime(2019, 6, 11, 0, 0)
+            elif instrument.ticker == 'CHMF':
+                if d.last_buy_date.date() == datetime(2020, 6, 12).date():
+                    d.last_buy_date = datetime(2020, 6, 11, 0, 0)
+                    d.yield_value = Quotation(units=5, nano=71)
+                elif d.last_buy_date.date() == datetime(2021, 5, 28).date():
+                    d.yield_value = Quotation(units=4, nano=73)
+            elif instrument.ticker == 'GMKN':
+                if d.last_buy_date.date() == datetime(2022, 6, 13).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=9)
+            elif instrument.ticker == 'NLMK':
+                if d.last_buy_date.date() == datetime(2020, 1, 7).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=6)
+            elif instrument.ticker == 'NVTK':
+                if d.last_buy_date.date() == datetime(2022, 5, 3).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=29, month=4)
+            elif instrument.ticker == 'SELG':
+                if d.last_buy_date.date() == datetime(2020, 6, 24).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=23)
+            elif instrument.ticker == 'FLOT':
+                if d.last_buy_date.date() == datetime(2024, 4 ,1).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=2)
+            elif instrument.ticker == 'SBER':
+                if d.last_buy_date.date() == datetime(2019, 6, 11).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=10)
+            elif instrument.ticker == 'SBERP':
+                if d.last_buy_date.date() == datetime(2019, 6, 11).date():
+                    d.last_buy_date = d.last_buy_date.replace(day=10)
+
+            print(d)
+        data_feed = await get_data_feed(instrument=instrument, from_=from_, to=to,
+                                        interval=CandleInterval.CANDLE_INTERVAL_DAY)
+        backtester = Backtester(
+            instruments_data=[InstrumentData(ticker=instrument.ticker, data_feed=data_feed)],
+            strategies_data=
+            [StrategyData(strategy=StrategyDivGap, params=params_strategy, kwargs={'dividends': dividends})],
+        )
+        backtester.run()
+
+        strategy = backtester.strategies[0]
+        if strategy.results:
+            average_deviation = sum([dd.deviation for dd in strategy.results]) / len(strategy.results)
+            deviations[instrument.ticker] = average_deviation
+            for r in strategy.results:
+                print(r, r.deviation)
+
+    for k, v in sorted(deviations.items(), key=lambda x: abs(x[1]), reverse=True):
+        print(f'Ticker: {k} | Average deviation={round(v*100, 2)}%')
 
 
 async def main():
-    start_cash = 100_000
-    comm = .0004
-
-    interval = CandleInterval.CANDLE_INTERVAL_DAY
-    to = DateTimeFactory.now()
-    # to -= timedelta(days=365*2)
+    to = datetime(2024, 5, 10, tzinfo=UTC)
     from_ = to - timedelta(days=365*5)
     print(f'FROM={from_} | TO={to}')
-    count_days = 1
-    percent_min_div_yield = 3
 
-    instrument = await get_instrument_by(id='GAZP', id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER, class_code='TQBR')
-    strategy_result = await backtest_one_instrument(
-        instrument=instrument,
-        start_cash=start_cash,
-        comm=comm,
-        # from_=instrument.first_1day_candle_date,
-        from_=from_,
-        to=to,
-        interval=interval,
-        count_days=count_days,
-        percent_min_div_yield=percent_min_div_yield
+    params_strategy = ParamsDivGap(
+        sizer=SizerPercentOfCash(trade_max_size=.99),
+        percent_min_div_yield=0,
     )
-    exit()
-
-    instruments = await Shares.from_IMOEX()
-    strategies_results = []
-    for instrument in instruments:
-        strategy_result = await backtest_one_instrument(
-            instrument=instrument,
-            start_cash=start_cash,
-            comm=comm,
-            from_=from_,
-            # from_=instrument.first_1day_candle_date,
-            to=to,
-            interval=interval,
-            count_days=count_days,
-            percent_min_div_yield=percent_min_div_yield
-        )
-        if strategy_result:
-            strategies_results.append(strategy_result)
-
-    results_with_trades = [r for r in strategies_results if r.trades]
-    results_sorted_by_successful_trades = sorted(results_with_trades, key=lambda x: x.pnl_net)
-    for s in results_sorted_by_successful_trades:
-        print(s)
-        print()
-
-    results = StrategiesResults(results_with_trades)
-    print(results)
+    await backtest(from_=from_, to=to, params_strategy=params_strategy)

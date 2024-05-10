@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Type
+from dataclasses import dataclass, field
+from typing import Type, Any
 
 from backtrader import TimeFrame
 
@@ -100,3 +100,5 @@ class InstrumentData:
 class StrategyData:
     strategy: Type[BaseStrategy]
     params: AnyParamsStrategy
+    kwargs: dict[str, Any] = field(default_factory=lambda: {})
+

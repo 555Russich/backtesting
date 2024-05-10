@@ -49,4 +49,13 @@ class ParamsPeriodStats(_Iterable):
     fund: bool | None
 
 
-AnyParamsStrategy = Union[ParamsClosingOnHighs]
+@dataclass
+class ParamsDivGap(_Iterable):
+    percent_min_div_yield: float
+    sizer: S = None
+
+
+AnyParamsStrategy = Union[
+    ParamsClosingOnHighs,
+    ParamsDivGap
+]
